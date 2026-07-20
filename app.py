@@ -10,16 +10,17 @@ API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GDRIVE_FOLDER_ID = os.environ["GDRIVE_FOLDER_ID"]
 
-# credentials.json ni env var nundi write cheyyi (Render lo file upload ledhu kabatti)
+# Load service account JSON from env
 cred_json = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-with open("credentials.json", "w") as f:
-    json.dump(cred_json, f)
-# ----------------------------------
 
-# Auth GDrive
+# ---------- AUTH GDRIVE (Service Account, no file) ----------
 gauth = GoogleAuth()
-gauth.LoadCredentialsFile("credentials.json")
+gauth.auth_method = 'service'
+gauth.service_account_email = cred_json['client_email']
+gauth.service_account_key = cred_json
+gauth.credentials = gauth.GetCredentials()  # builds credentials object
 drive = GoogleDrive(gauth)
+# ------------------------------------------------------------
 
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 pending = {}
@@ -45,7 +46,7 @@ async def handle_download(event):
     if filename.lower() == "skip" or not filename:
         filename = "video"
 
-    await event.reply(f"⬇️ Downloading & merging: {filename}.mp4 (takes time)")
+    await event.reply(f"⬇️ Downloading & merging: {filename}.mp4 (may take time)")
 
     try:
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
@@ -77,18 +78,17 @@ async def main():
     await bot.start()
     print("🐱 Bot RUNNING on Render!")
 
-# Flask app (Render ki web service chupinchataniki)
+# Flask app (for Render health check)
 app = Flask(__name__)
 @app.route('/')
 def home():
     return "Patreon Mirror Bot is running!"
 
 if __name__ == "__main__":
-    # Bot ni background thread lo run cheyyi
+    # Start bot in background thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     thread = threading.Thread(target=loop.run_until_complete, args=(main(),), daemon=True)
     thread.start()
-    # Render port 10000 ni listen cheyyi
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
