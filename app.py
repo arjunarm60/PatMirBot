@@ -29,8 +29,18 @@ drive = GoogleDrive(gauth)
 print("✅ Google Drive authenticated.")
 
 # ---------- TELEGRAM BOT ----------
+bot = TelegramClient("bot", API_ID, API_HASH)
 pending = {}  # user_id -> {'url': url}
 
+@bot.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    await event.reply("Hello! I'm a Patreon mirror bot. Use /mirror <url>")
+
+@bot.on(events.NewMessage(pattern='/ping'))
+async def ping(event):
+    await event.reply("pong! Bot is alive.")
+
+@bot.on(events.NewMessage(pattern='/mirror'))
 async def mirror(event):
     args = event.message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -38,19 +48,21 @@ async def mirror(event):
         return
     pending[event.sender_id] = {"url": args[1]}
     await event.reply("✅ Link received! Now send me the filename (without .mp4) or type 'skip'.")
+    print(f"Pending: {pending}")  # debug
 
+@bot.on(events.NewMessage)
 async def handle_download(event):
+    # Ignore commands
+    if event.message.text.startswith('/'):
+        return
     if event.sender_id not in pending:
         return
-    if event.message.text.startswith("/"):
-        return
-
     data = pending.pop(event.sender_id)
     url = data["url"]
     filename = event.message.text.strip()
     if filename.lower() == "skip" or not filename:
         filename = "video"
-
+    print(f"Starting download for user {event.sender_id}, filename: {filename}, url: {url[:100]}...")
     await event.reply(f"⬇️ Downloading & merging: {filename}.mp4 (may take 5-30 mins)")
 
     try:
@@ -65,34 +77,35 @@ async def handle_download(event):
                 url,
                 "-o", f"{filename}.mp4"
             ]
+            print("Running yt-dlp command:", " ".join(cmd))
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
             if proc.returncode != 0:
+                print(f"yt-dlp stderr: {proc.stderr[-500:]}")
                 await event.reply(f"❌ Download error:\n{proc.stderr[-500:]}")
                 return
-
+            print("Download and merge completed successfully.")
             files = [f for f in os.listdir(".") if f.endswith(".mp4")]
             if not files:
                 await event.reply("❌ No MP4 generated. Check link.")
                 return
             fpath = files[0]
             await event.reply("📤 Uploading to Google Drive... (may take a while)")
-
+            print(f"Uploading {fpath} to GDrive...")
             gfile = drive.CreateFile({"title": fpath, "parents": [{"id": GDRIVE_FOLDER_ID}]})
             gfile.SetContentFile(fpath)
             gfile.Upload()
+            print("Upload completed.")
             link = gfile.get("alternateLink") or gfile.get("webContentLink") or "Check your Drive"
             await event.reply(f"✅ **Success!**\n📁 {fpath}\n🔗 {link}")
-
     except subprocess.TimeoutExpired:
         await event.reply("❌ Download timed out (1 hour). Try again.")
+        print("Timeout expired.")
     except Exception as e:
         await event.reply(f"❌ Error:\n{str(e)[:500]}")
+        print(f"Exception: {e}")
 
 async def main():
-    bot = TelegramClient("bot", API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
-    bot.add_event_handler(mirror, events.NewMessage(pattern="/mirror"))
-    bot.add_event_handler(handle_download, events.NewMessage)
     print("🐱 Bot RUNNING on Render! Now listening for messages...")
     await bot.run_until_disconnected()
 
