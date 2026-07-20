@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: PatMirBot
+    runtime: python
+    buildCommand: apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: GDRIVE_FOLDER_ID
+        sync: false
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+    plan: free
