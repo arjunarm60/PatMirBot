@@ -1,4 +1,4 @@
-import os, subprocess, asyncio, tempfile, json, threading, shutil
+import os, subprocess, asyncio, tempfile, json, threading
 from flask import Flask
 from telethon import TelegramClient, events
 from pydrive2.auth import GoogleAuth
@@ -13,14 +13,10 @@ GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 
 if not all([API_ID, API_HASH, BOT_TOKEN, GDRIVE_FOLDER_ID, GOOGLE_CREDENTIALS_JSON]):
-    raise ValueError("Missing one or more environment variables.")
+    raise ValueError("Missing environment variables.")
 
-# Parse credentials safely
-try:
-    cred_json = json.loads(GOOGLE_CREDENTIALS_JSON.strip())
-except json.JSONDecodeError as e:
-    print(f"❌ Invalid GOOGLE_CREDENTIALS_JSON: {e}")
-    raise
+# Parse credentials
+cred_json = json.loads(GOOGLE_CREDENTIALS_JSON.strip())
 
 # ---------- AUTH GDRIVE ----------
 creds = service_account.Credentials.from_service_account_info(
@@ -33,11 +29,10 @@ gauth.auth_method = 'service'
 drive = GoogleDrive(gauth)
 print("✅ Google Drive authenticated.")
 
-# ---------- TELEGRAM BOT ----------
-bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-pending = {}  # user_id -> {'url': url, 'stage': 'waiting_filename'}
+# ---------- TELEGRAM BOT (Client created inside main) ----------
+pending = {}  # user_id -> {'url': url}
 
-@bot.on(events.NewMessage(pattern="/mirror"))
+@events.register(events.NewMessage(pattern="/mirror"))
 async def mirror(event):
     args = event.message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -46,7 +41,7 @@ async def mirror(event):
     pending[event.sender_id] = {"url": args[1]}
     await event.reply("✅ Link received! Now send me the filename (without .mp4) or type 'skip'.")
 
-@bot.on(events.NewMessage)
+@events.register(events.NewMessage)
 async def handle_download(event):
     if event.sender_id not in pending:
         return
@@ -73,19 +68,18 @@ async def handle_download(event):
                 url,
                 "-o", f"{filename}.mp4"
             ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)  # 1 hour timeout
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
             if proc.returncode != 0:
                 await event.reply(f"❌ Download error:\n{proc.stderr[-500:]}")
                 return
 
             files = [f for f in os.listdir(".") if f.endswith(".mp4")]
             if not files:
-                await event.reply("❌ No MP4 generated. Check if the link is valid.")
+                await event.reply("❌ No MP4 generated. Check link.")
                 return
             fpath = files[0]
-            await event.reply("📤 Uploading to Google Drive... (this may take a while)")
+            await event.reply("📤 Uploading to Google Drive... (may take a while)")
 
-            # Upload
             gfile = drive.CreateFile({"title": fpath, "parents": [{"id": GDRIVE_FOLDER_ID}]})
             gfile.SetContentFile(fpath)
             gfile.Upload()
@@ -93,28 +87,32 @@ async def handle_download(event):
             await event.reply(f"✅ **Success!**\n📁 {fpath}\n🔗 {link}")
 
     except subprocess.TimeoutExpired:
-        await event.reply("❌ Download timed out (1 hour). Try again with a faster connection.")
+        await event.reply("❌ Download timed out (1 hour). Try again.")
     except Exception as e:
-        await event.reply(f"❌ Unexpected error:\n{str(e)[:500]}")
-    finally:
-        # Cleanup any leftover files in /tmp (already done by TemporaryDirectory)
-        pass
+        await event.reply(f"❌ Error:\n{str(e)[:500]}")
 
 async def main():
+    bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+    # Add handlers (using the functions defined above)
+    bot.add_event_handler(mirror, events.NewMessage(pattern="/mirror"))
+    bot.add_event_handler(handle_download, events.NewMessage)
     await bot.start()
     print("🐱 Bot RUNNING on Render! Now listening for messages...")
     await bot.run_until_disconnected()
 
-# Flask app (for health checks)
+# ---------- FLASK APP (runs in a separate thread) ----------
 app = Flask(__name__)
 @app.route('/')
 def home():
     return "Patreon Mirror Bot is running!"
 
-if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    thread = threading.Thread(target=loop.run_until_complete, args=(main(),), daemon=True)
-    thread.start()
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+if __name__ == "__main__":
+    # Start Flask in a background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    # Run bot in main thread with its own event loop
+    asyncio.run(main())
