@@ -1,4 +1,4 @@
-import os, subprocess, asyncio, tempfile, json, threading, time
+import os, subprocess, asyncio, tempfile, json, threading
 from flask import Flask
 from telethon import TelegramClient, events
 from pydrive2.auth import GoogleAuth
@@ -29,8 +29,7 @@ drive = GoogleDrive(gauth)
 print("✅ Google Drive authenticated.")
 
 # ---------- TELEGRAM BOT ----------
-bot = TelegramClient("bot", API_ID, API_HASH)
-pending = {}
+pending = {}  # user_id -> {'url': url}
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
@@ -64,7 +63,6 @@ async def handle_download(event):
     await event.reply(f"⬇️ Downloading & merging: {filename}.mp4 (may take 5-30 mins)")
     print(f"[DEBUG] Starting download for user {event.sender_id}")
 
-    # Run in a thread to avoid blocking the event loop
     def download_and_upload():
         try:
             with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
@@ -122,15 +120,17 @@ async def handle_download(event):
             )
             print(f"[EXCEPTION] {e}")
 
-    # Start download in a background thread
     threading.Thread(target=download_and_upload, daemon=True).start()
 
 async def main():
+    # Use a session file to avoid FloodWait on every restart
+    session_file = "/tmp/bot_session.session"
+    bot = TelegramClient(session_file, API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
     print("🐱 Bot RUNNING on Render! Now listening...")
     await bot.run_until_disconnected()
 
-# ---------- FLASK ----------
+# ---------- FLASK APP ----------
 app = Flask(__name__)
 @app.route('/')
 def home():
