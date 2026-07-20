@@ -15,7 +15,6 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 if not all([API_ID, API_HASH, BOT_TOKEN, GDRIVE_FOLDER_ID, GOOGLE_CREDENTIALS_JSON]):
     raise ValueError("Missing environment variables.")
 
-# Parse credentials
 cred_json = json.loads(GOOGLE_CREDENTIALS_JSON.strip())
 
 # ---------- AUTH GDRIVE ----------
@@ -29,10 +28,9 @@ gauth.auth_method = 'service'
 drive = GoogleDrive(gauth)
 print("✅ Google Drive authenticated.")
 
-# ---------- TELEGRAM BOT (Client created inside main) ----------
+# ---------- TELEGRAM BOT ----------
 pending = {}  # user_id -> {'url': url}
 
-@events.register(events.NewMessage(pattern="/mirror"))
 async def mirror(event):
     args = event.message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -41,7 +39,6 @@ async def mirror(event):
     pending[event.sender_id] = {"url": args[1]}
     await event.reply("✅ Link received! Now send me the filename (without .mp4) or type 'skip'.")
 
-@events.register(events.NewMessage)
 async def handle_download(event):
     if event.sender_id not in pending:
         return
@@ -92,15 +89,14 @@ async def handle_download(event):
         await event.reply(f"❌ Error:\n{str(e)[:500]}")
 
 async def main():
-    bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-    # Add handlers (using the functions defined above)
+    bot = TelegramClient("bot", API_ID, API_HASH)
+    await bot.start(bot_token=BOT_TOKEN)
     bot.add_event_handler(mirror, events.NewMessage(pattern="/mirror"))
     bot.add_event_handler(handle_download, events.NewMessage)
-    await bot.start()
     print("🐱 Bot RUNNING on Render! Now listening for messages...")
     await bot.run_until_disconnected()
 
-# ---------- FLASK APP (runs in a separate thread) ----------
+# ---------- FLASK APP ----------
 app = Flask(__name__)
 @app.route('/')
 def home():
@@ -114,5 +110,5 @@ if __name__ == "__main__":
     # Start Flask in a background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    # Run bot in main thread with its own event loop
+    # Run bot in main thread
     asyncio.run(main())
