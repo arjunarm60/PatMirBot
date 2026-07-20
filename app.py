@@ -3,6 +3,7 @@ from flask import Flask
 from telethon import TelegramClient, events
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
+from google.oauth2 import service_account   # <-- new import
 
 # ---------- LOAD SECRETS ----------
 API_ID = int(os.environ["API_ID"])
@@ -13,18 +14,16 @@ GDRIVE_FOLDER_ID = os.environ["GDRIVE_FOLDER_ID"]
 # Load service account JSON from env
 cred_json = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
 
-# ---------- AUTH GDRIVE (Service Account via temp file) ----------
-# Write cred_json to a temporary file (pydrive2 expects a file)
-with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
-    json.dump(cred_json, f)
-    temp_cred_file = f.name
-
+# ---------- AUTH GDRIVE (Service Account with explicit credentials) ----------
+creds = service_account.Credentials.from_service_account_info(
+    cred_json,
+    scopes=['https://www.googleapis.com/auth/drive']
+)
 gauth = GoogleAuth()
-gauth.LoadServiceAccountJsonFile(temp_cred_file)  # uses service account
+gauth.credentials = creds
+gauth.auth_method = 'service'   # just to set the flag
 drive = GoogleDrive(gauth)
-# Clean up temp file (optional, but we can delete later)
-os.unlink(temp_cred_file)
-# ------------------------------------------------------------
+# ----------------------------------------------------------------------
 
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 pending = {}
