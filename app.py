@@ -34,11 +34,11 @@ pending = {}  # user_id -> {'url': url}
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
-    await event.reply("Hello! I'm a Patreon mirror bot. Use /mirror <url>")
+    await event.reply("Hello! Use /mirror <url>")
 
 @bot.on(events.NewMessage(pattern='/ping'))
 async def ping(event):
-    await event.reply("pong! Bot is alive.")
+    await event.reply("pong!")
 
 @bot.on(events.NewMessage(pattern='/mirror'))
 async def mirror(event):
@@ -47,12 +47,10 @@ async def mirror(event):
         await event.reply("Usage: /mirror <patreon_stream_url>")
         return
     pending[event.sender_id] = {"url": args[1]}
-    await event.reply("✅ Link received! Now send me the filename (without .mp4) or type 'skip'.")
-    print(f"Pending: {pending}")  # debug
+    await event.reply("✅ Link received! Now send filename (without .mp4) or 'skip'.")
 
 @bot.on(events.NewMessage)
 async def handle_download(event):
-    # Ignore commands
     if event.message.text.startswith('/'):
         return
     if event.sender_id not in pending:
@@ -62,51 +60,86 @@ async def handle_download(event):
     filename = event.message.text.strip()
     if filename.lower() == "skip" or not filename:
         filename = "video"
-    print(f"Starting download for user {event.sender_id}, filename: {filename}, url: {url[:100]}...")
-    await event.reply(f"⬇️ Downloading & merging: {filename}.mp4 (may take 5-30 mins)")
+
+    # Step 1: Check ffmpeg
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await proc.wait()
+        if proc.returncode != 0:
+            await event.reply("❌ ffmpeg not installed. Please check Render Build Command.")
+            return
+    except FileNotFoundError:
+        await event.reply("❌ ffmpeg missing. Add to build command.")
+        return
+
+    await event.reply(f"⬇️ Downloading & merging: {filename}.mp4 (this may take 5-30 mins)")
 
     try:
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
             os.chdir(tmp)
+
+            # Step 2: Build yt-dlp command
             cmd = [
                 "yt-dlp",
                 "--add-header", "Referer: https://www.patreon.com/",
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "--merge-output-format", "mp4",
                 "--no-cache-dir",
                 "--no-playlist",
+                "--no-check-certificate",
+                "-v",  # verbose for logs
                 url,
                 "-o", f"{filename}.mp4"
             ]
-            print("Running yt-dlp command:", " ".join(cmd))
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            if proc.returncode != 0:
-                print(f"yt-dlp stderr: {proc.stderr[-500:]}")
-                await event.reply(f"❌ Download error:\n{proc.stderr[-500:]}")
+
+            # Step 3: Run async subprocess
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            # Optional: send periodic status? We'll just wait with timeout
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=3600)
+            except asyncio.TimeoutError:
+                process.kill()
+                await event.reply("❌ Download timed out after 1 hour.")
                 return
-            print("Download and merge completed successfully.")
+
+            if process.returncode != 0:
+                err_msg = stderr.decode()[-500:]
+                await event.reply(f"❌ yt-dlp error:\n{err_msg}")
+                # Also print to Render logs for debugging
+                print(f"yt-dlp stderr: {stderr.decode()}")
+                return
+
+            print("yt-dlp completed successfully.")
+            await event.reply("✅ Download & merge complete. Now uploading...")
+
+            # Step 4: Upload
             files = [f for f in os.listdir(".") if f.endswith(".mp4")]
             if not files:
-                await event.reply("❌ No MP4 generated. Check link.")
+                await event.reply("❌ No MP4 file generated.")
                 return
             fpath = files[0]
-            await event.reply("📤 Uploading to Google Drive... (may take a while)")
-            print(f"Uploading {fpath} to GDrive...")
             gfile = drive.CreateFile({"title": fpath, "parents": [{"id": GDRIVE_FOLDER_ID}]})
             gfile.SetContentFile(fpath)
             gfile.Upload()
-            print("Upload completed.")
             link = gfile.get("alternateLink") or gfile.get("webContentLink") or "Check your Drive"
             await event.reply(f"✅ **Success!**\n📁 {fpath}\n🔗 {link}")
-    except subprocess.TimeoutExpired:
-        await event.reply("❌ Download timed out (1 hour). Try again.")
-        print("Timeout expired.")
+
     except Exception as e:
-        await event.reply(f"❌ Error:\n{str(e)[:500]}")
+        await event.reply(f"❌ Unexpected error:\n{str(e)[:500]}")
         print(f"Exception: {e}")
 
 async def main():
     await bot.start(bot_token=BOT_TOKEN)
-    print("🐱 Bot RUNNING on Render! Now listening for messages...")
+    print("🐱 Bot RUNNING on Render! Now listening...")
     await bot.run_until_disconnected()
 
 # ---------- FLASK APP ----------
@@ -120,8 +153,6 @@ def run_flask():
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
-    # Start Flask in a background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    # Run bot in main thread
     asyncio.run(main())
