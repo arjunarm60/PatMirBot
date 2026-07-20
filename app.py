@@ -28,18 +28,17 @@ gauth.auth_method = 'service'
 drive = GoogleDrive(gauth)
 print("✅ Google Drive authenticated.")
 
-# ---------- TELEGRAM BOT ----------
+# ---------- TELEGRAM BOT (global, will be assigned later) ----------
+bot = None
 pending = {}  # user_id -> {'url': url}
 
-@bot.on(events.NewMessage(pattern='/start'))
+# ---------- HANDLER FUNCTIONS ----------
 async def start(event):
     await event.reply("Hello! Use /mirror <url>")
 
-@bot.on(events.NewMessage(pattern='/ping'))
 async def ping(event):
     await event.reply("pong!")
 
-@bot.on(events.NewMessage(pattern='/mirror'))
 async def mirror(event):
     args = event.message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -48,7 +47,6 @@ async def mirror(event):
     pending[event.sender_id] = {"url": args[1]}
     await event.reply("✅ Link received! Now send filename (without .mp4) or 'skip'.")
 
-@bot.on(events.NewMessage)
 async def handle_download(event):
     if event.message.text.startswith('/'):
         return
@@ -123,10 +121,17 @@ async def handle_download(event):
     threading.Thread(target=download_and_upload, daemon=True).start()
 
 async def main():
-    # Use a session file to avoid FloodWait on every restart
+    global bot
     session_file = "/tmp/bot_session.session"
     bot = TelegramClient(session_file, API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
+
+    # Register handlers
+    bot.add_event_handler(start, events.NewMessage(pattern='/start'))
+    bot.add_event_handler(ping, events.NewMessage(pattern='/ping'))
+    bot.add_event_handler(mirror, events.NewMessage(pattern='/mirror'))
+    bot.add_event_handler(handle_download, events.NewMessage)
+
     print("🐱 Bot RUNNING on Render! Now listening...")
     await bot.run_until_disconnected()
 
