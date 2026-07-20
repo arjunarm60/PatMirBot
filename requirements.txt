@@ -1,0 +1,4 @@
+telethon
+pydrive2
+yt-dlp
+flask
